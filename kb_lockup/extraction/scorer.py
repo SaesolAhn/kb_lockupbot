@@ -11,6 +11,48 @@ from kb_lockup.core.constants import (
 )
 
 
+# Keywords that indicate a table is NOT a lockup table
+NEGATIVE_KEYWORDS = [
+    "재무제표",
+    "손익계산서",
+    "재무상태표",
+    "현금흐름표",
+    "자본변동표",
+    "주석",
+    "감사보고서",
+    "연결",
+    "당기순이익",
+    "매출액",
+    "영업이익",
+    "자산총계",
+    "부채총계",
+    "자본총계",
+    "이익잉여금",
+    "주당순이익",
+    "배당금",
+    "요약재무정보",
+    "주요재무",
+    "법인세",
+]
+
+# Column headers that indicate non-lockup tables
+NEGATIVE_HEADERS = [
+    "매출",
+    "영업이익",
+    "당기순이익",
+    "자산",
+    "부채",
+    "자본",
+    "이익",
+    "비용",
+    "손실",
+    "세전",
+    "세후",
+    "전기",
+    "당기",
+]
+
+
 class TableScorer:
     """Score and rank table candidates for lockup relevance"""
 
@@ -32,6 +74,12 @@ class TableScorer:
             candidate.context_text or "",
             candidate.raw_html or "",
         ]).lower()
+
+        # Check for negative signals first (non-lockup tables)
+        negative_penalty = self._calculate_negative_score(candidate, search_text)
+        if negative_penalty >= 0.5:
+            # Highly likely to be non-lockup table
+            return 0.0
 
         # Strong lockup keywords
         for keyword in LOCKUP_KEYWORDS["primary"]:
@@ -64,11 +112,47 @@ class TableScorer:
         )
         score += row_bonus
 
+        # Apply negative penalty
+        score = max(0, score - negative_penalty)
+
         # Normalize to 0-1 range
         max_possible = sum(SCORING_WEIGHTS.values())
         normalized_score = min(score / max_possible, 1.0)
 
         return round(normalized_score, 3)
+
+    def _calculate_negative_score(
+        self,
+        candidate: TableCandidate,
+        search_text: str,
+    ) -> float:
+        """Calculate penalty for non-lockup signals"""
+        penalty = 0.0
+
+        # Check negative keywords in content
+        for keyword in NEGATIVE_KEYWORDS:
+            if keyword in search_text:
+                penalty += 0.15
+                if penalty >= 0.5:
+                    return penalty
+
+        # Check negative headers
+        headers_text = " ".join(candidate.column_headers).lower()
+        for header in NEGATIVE_HEADERS:
+            if header in headers_text:
+                penalty += 0.2
+                if penalty >= 0.5:
+                    return penalty
+
+        # Tables with too few columns are likely not lockup tables
+        if len(candidate.column_headers) < 3:
+            penalty += 0.1
+
+        # Tables with too few rows are likely not lockup tables
+        if candidate.row_count < 2:
+            penalty += 0.1
+
+        return penalty
 
     def _score_columns(self, headers: List[str]) -> float:
         """Score based on column header matches"""

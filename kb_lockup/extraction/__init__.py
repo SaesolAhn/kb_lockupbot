@@ -5,6 +5,7 @@ from kb_lockup.extraction.qwen_extractor import QwenTableExtractor
 from kb_lockup.extraction.normalizer import KoreanNormalizer
 from kb_lockup.extraction.scorer import TableScorer
 from kb_lockup.extraction.pipeline import ExtractionPipeline, run_extraction
+from kb_lockup.extraction.rule_extractor import RuleBasedExtractor, HybridExtractor
 
 __all__ = [
     "TableFinder",
@@ -13,4 +14,6 @@ __all__ = [
     "TableScorer",
     "ExtractionPipeline",
     "run_extraction",
+    "RuleBasedExtractor",
+    "HybridExtractor",
 ]

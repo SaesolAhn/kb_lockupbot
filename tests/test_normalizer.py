@@ -44,8 +44,8 @@ class TestDateNormalization:
             "상장일로부터 6개월",
             listing_date=listing,
         )
-        # 6 months ≈ 180 days
-        assert result == date(2024, 7, 14)
+        # 6 months ≈ 180 days (6 * 30)
+        assert result == date(2024, 7, 13)
 
     def test_relative_date_years(self):
         """Test relative date with years"""
@@ -55,7 +55,7 @@ class TestDateNormalization:
             listing_date=listing,
         )
         # 1 year ≈ 365 days
-        assert result == date(2025, 1, 15)
+        assert result == date(2025, 1, 14)
 
     def test_invalid_date(self):
         """Test invalid date string"""

@@ -21,6 +21,7 @@ from kb_lockup.dart.parser import DartParser
 from kb_lockup.dart.downloader import ProspectusDownloader
 from kb_lockup.extraction.table_finder import TableFinder
 from kb_lockup.extraction.qwen_extractor import QwenTableExtractor
+from kb_lockup.extraction.rule_extractor import RuleBasedExtractor, HybridExtractor
 from kb_lockup.extraction.scorer import TableScorer
 from kb_lockup.storage.database import Database
 
@@ -32,6 +33,8 @@ class ExtractionStats:
     documents_processed: int = 0
     tables_found: int = 0
     entries_extracted: int = 0
+    ai_extractions: int = 0
+    rule_extractions: int = 0
     errors: int = 0
 
 
@@ -55,10 +58,12 @@ class ExtractionPipeline:
         self.dart_api_key = dart_api_key or settings.dart_api_key
         self.qwen_api_key = qwen_api_key or settings.qwen_api_key
         self.db_path = db_path
+        self.use_hybrid = True  # Use hybrid extraction by default
 
         self._api: Optional[DartAPI] = None
         self._db: Optional[Database] = None
-        self._extractor: Optional[QwenTableExtractor] = None
+        self._extractor: Optional[HybridExtractor] = None
+        self._rule_extractor: Optional[RuleBasedExtractor] = None
 
         self.stats = ExtractionStats()
 
@@ -79,8 +84,14 @@ class ExtractionPipeline:
         await self._db.connect()
         await self._db.init_schema()
 
+        # Initialize extractors
+        self._rule_extractor = RuleBasedExtractor()
+
         if self.qwen_api_key:
-            self._extractor = QwenTableExtractor(self.qwen_api_key)
+            self._extractor = HybridExtractor(self.qwen_api_key)
+            logger.info("Using hybrid extraction (AI + rules)")
+        else:
+            logger.info("Using rule-based extraction only (no AI API key)")
 
         logger.info("Extraction pipeline initialized")
 
@@ -240,21 +251,43 @@ class ExtractionPipeline:
                 confidence_score=0,
             )
 
-        # Extract with Qwen if available
+        # Extract data using hybrid or rule-based extraction
         entries = []
         confidence = candidates[0].score if candidates else 0
+        extraction_method = "none"
 
+        # Try hybrid extraction (AI + rules) first
         if self._extractor and candidates:
             try:
-                entries = self._extractor.extract_tables(
+                entries = self._extractor.extract(
                     candidates,
                     context=f"Company: {company.corp_name}, Document: {prospectus.report_nm}",
+                    listing_date=company.listing_date,
                 )
-                logger.info(f"Extracted {len(entries)} lockup entries")
+                extraction_method = "hybrid"
+                self.stats.ai_extractions += 1
+                logger.info(f"Hybrid extraction: {len(entries)} lockup entries")
             except Exception as e:
-                logger.error(f"Qwen extraction failed: {e}")
-                # Fall back to no extraction
-                entries = []
+                logger.warning(f"Hybrid extraction failed: {e}")
+
+        # Fall back to pure rule-based extraction
+        if not entries and self._rule_extractor and candidates:
+            try:
+                for candidate in candidates:
+                    rule_entries = self._rule_extractor.extract_from_candidate(
+                        candidate,
+                        listing_date=company.listing_date,
+                    )
+                    entries.extend(rule_entries)
+                extraction_method = "rule_based"
+                self.stats.rule_extractions += 1
+                logger.info(f"Rule-based extraction: {len(entries)} lockup entries")
+            except Exception as e:
+                logger.error(f"Rule-based extraction failed: {e}")
+
+        # Deduplicate entries by owner
+        if entries:
+            entries = self._deduplicate_entries(entries)
 
         # Store results
         if entries:
@@ -273,7 +306,7 @@ class ExtractionPipeline:
             corp_code=company.corp_code,
             report_nm=prospectus.report_nm,
             rcept_dt=prospectus.rcept_dt,
-            method="qwen" if self._extractor else "tables_only",
+            method=extraction_method,
             tables_found=len(candidates),
         )
 
@@ -285,9 +318,41 @@ class ExtractionPipeline:
             rcept_no=prospectus.rcept_no,
             section_title=candidates[0].section_title if candidates else None,
             entries=entries,
-            extraction_method="qwen" if self._extractor else "tables_only",
+            extraction_method=extraction_method,
             confidence_score=confidence,
         )
+
+    def _deduplicate_entries(self, entries: List[LockupEntry]) -> List[LockupEntry]:
+        """Remove duplicate entries, keeping the most complete one"""
+        seen = {}
+
+        for entry in entries:
+            key = entry.owner.lower().strip()
+
+            if key not in seen:
+                seen[key] = entry
+            else:
+                # Keep entry with more data
+                existing = seen[key]
+                if self._entry_completeness(entry) > self._entry_completeness(existing):
+                    seen[key] = entry
+
+        return list(seen.values())
+
+    def _entry_completeness(self, entry: LockupEntry) -> int:
+        """Score how complete an entry is"""
+        score = 0
+        if entry.amount:
+            score += 1
+        if entry.ratio:
+            score += 1
+        if entry.release_date:
+            score += 2  # More important
+        if entry.period_months:
+            score += 1
+        if entry.remarks:
+            score += 0.5
+        return score
 
     async def extract_batch(
         self,
