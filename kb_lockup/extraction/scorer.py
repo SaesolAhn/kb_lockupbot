@@ -186,7 +186,6 @@ class TableScorer:
             return False
 
         # Must have at least owner and one of: amount, ratio, release_date
-        required = {"owner"}
         optional = {"amount", "ratio", "release_date"}
 
         headers_text = " ".join(candidate.column_headers).lower()

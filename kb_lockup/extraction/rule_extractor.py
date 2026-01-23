@@ -1,7 +1,6 @@
 """Rule-based table extraction as fallback"""
 
-import re
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict
 from datetime import date
 
 from bs4 import BeautifulSoup, Tag

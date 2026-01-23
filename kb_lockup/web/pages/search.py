@@ -73,16 +73,16 @@ def render():
         # Convert to DataFrame
         df = pd.DataFrame([
             {
-                "회사명": l.company_name,
-                "종목코드": l.stock_code or "-",
-                "주주명": l.owner,
-                "보유량": l.amount,
-                "지분율(%)": l.ratio,
-                "해제일": l.release_date.isoformat() if l.release_date else "-",
-                "D-Day": (l.release_date - date.today()).days if l.release_date else None,
-                "비고": l.remarks or "-",
+                "회사명": lockup.company_name,
+                "종목코드": lockup.stock_code or "-",
+                "주주명": lockup.owner,
+                "보유량": lockup.amount,
+                "지분율(%)": lockup.ratio,
+                "해제일": lockup.release_date.isoformat() if lockup.release_date else "-",
+                "D-Day": (lockup.release_date - date.today()).days if lockup.release_date else None,
+                "비고": lockup.remarks or "-",
             }
-            for l in filtered
+            for lockup in filtered
         ])
 
         # Sort

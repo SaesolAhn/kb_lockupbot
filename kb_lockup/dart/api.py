@@ -3,7 +3,6 @@
 import asyncio
 from datetime import datetime, date
 from typing import Optional, List
-from pathlib import Path
 import time
 
 import httpx

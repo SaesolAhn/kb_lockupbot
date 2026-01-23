@@ -4,7 +4,6 @@ import re
 from datetime import date, timedelta
 from typing import Optional
 
-from loguru import logger
 
 from kb_lockup.core.constants import (
     DATE_PATTERNS,

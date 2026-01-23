@@ -3,7 +3,7 @@
 from datetime import date
 from typing import List, Optional
 
-from kb_lockup.core.models import LockupData, LockupEntry, ExitOpportunity
+from kb_lockup.core.models import LockupData, ExitOpportunity
 
 
 class MessageFormatter:

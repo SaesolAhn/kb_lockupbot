@@ -2,7 +2,7 @@
 
 import re
 from datetime import date
-from typing import Optional, Tuple
+from typing import Tuple
 
 from kb_lockup.core.exceptions import ValidationError
 

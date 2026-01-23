@@ -1,7 +1,7 @@
 """Qwen API for variable table layout extraction"""
 
 import json
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict
 from datetime import date
 
 from loguru import logger
@@ -234,16 +234,20 @@ class QwenTableExtractor:
         return processed
 
     def _clean_owner_name(self, name: str) -> str:
-        """Clean and normalize owner name"""
-        # Remove parenthetical notes
-        name = name.split("(")[0].strip()
+        """
+        Clean owner name while preserving exact identity.
 
-        # Remove common suffixes
-        suffixes = ["외", "등", "기타"]
-        for suffix in suffixes:
-            if name.endswith(suffix):
-                name = name[:-len(suffix)].strip()
+        IMPORTANT: Owner names must be preserved exactly as they appear
+        in the source document. Only minimal cleanup is performed:
+        - Strip leading/trailing whitespace
+        - Normalize internal whitespace
 
+        Parenthetical content like fund names, trust names, and role
+        designations (대표이사, etc.) must be preserved as they are
+        critical for identifying the exact shareholder entity.
+        """
+        # Only strip whitespace and normalize internal spaces
+        name = " ".join(name.split())
         return name
 
     def _validate_entries(self, entries: List[LockupEntry]) -> List[LockupEntry]:

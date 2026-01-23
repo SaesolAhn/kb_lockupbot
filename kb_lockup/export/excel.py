@@ -121,10 +121,10 @@ class ExcelExporter:
             summary_df = pd.DataFrame([{
                 "회사명": company_name,
                 "총 보호예수 건수": len(lockups),
-                "총 주식수": sum(l.amount or 0 for l in lockups),
-                "총 지분율": sum(l.ratio or 0 for l in lockups),
+                "총 주식수": sum(entry.amount or 0 for entry in lockups),
+                "총 지분율": sum(entry.ratio or 0 for entry in lockups),
                 "가장 빠른 해제일": min(
-                    (l.release_date for l in lockups if l.release_date),
+                    (entry.release_date for entry in lockups if entry.release_date),
                     default=None
                 ),
             }])
@@ -133,14 +133,14 @@ class ExcelExporter:
             # Detail sheet
             detail_df = pd.DataFrame([
                 {
-                    "주주명": l.owner,
-                    "보유량": l.amount,
-                    "지분율(%)": l.ratio,
-                    "해제일": l.release_date.isoformat() if l.release_date else None,
-                    "기간(개월)": l.lock_period_months,
-                    "비고": l.remarks,
+                    "주주명": entry.owner,
+                    "보유량": entry.amount,
+                    "지분율(%)": entry.ratio,
+                    "해제일": entry.release_date.isoformat() if entry.release_date else None,
+                    "기간(개월)": entry.lock_period_months,
+                    "비고": entry.remarks,
                 }
-                for l in lockups
+                for entry in lockups
             ])
             detail_df.to_excel(writer, sheet_name="상세내역", index=False)
 

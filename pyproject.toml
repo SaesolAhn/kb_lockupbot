@@ -41,6 +41,7 @@ dependencies = [
     "tenacity>=8.0",
     "loguru>=0.7",
     "click>=8.0",
+    "pykrx>=1.0",
 ]
 
 [project.optional-dependencies]

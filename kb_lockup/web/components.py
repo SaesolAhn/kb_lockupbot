@@ -5,7 +5,7 @@ from typing import List, Optional
 
 import streamlit as st
 
-from kb_lockup.core.models import LockupData, ExitOpportunity
+from kb_lockup.core.models import LockupData
 
 
 def lockup_card(data: LockupData) -> None:

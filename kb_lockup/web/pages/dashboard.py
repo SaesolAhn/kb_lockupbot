@@ -1,7 +1,7 @@
 """Dashboard page - overview and statistics"""
 
 import asyncio
-from datetime import date, timedelta
+from datetime import date
 
 import streamlit as st
 import pandas as pd
@@ -52,15 +52,15 @@ def render():
     if data["upcoming"]:
         df = pd.DataFrame([
             {
-                "회사명": l.company_name,
-                "종목코드": l.stock_code or "-",
-                "주주명": l.owner,
-                "보유량": f"{l.amount:,}" if l.amount else "-",
-                "지분율": f"{l.ratio:.1f}%" if l.ratio else "-",
-                "해제일": l.release_date.isoformat() if l.release_date else "-",
-                "D-Day": (l.release_date - date.today()).days if l.release_date else "-",
+                "회사명": lockup.company_name,
+                "종목코드": lockup.stock_code or "-",
+                "주주명": lockup.owner,
+                "보유량": f"{lockup.amount:,}" if lockup.amount else "-",
+                "지분율": f"{lockup.ratio:.1f}%" if lockup.ratio else "-",
+                "해제일": lockup.release_date.isoformat() if lockup.release_date else "-",
+                "D-Day": (lockup.release_date - date.today()).days if lockup.release_date else "-",
             }
-            for l in data["upcoming"][:20]
+            for lockup in data["upcoming"][:20]
         ])
 
         st.dataframe(
@@ -79,13 +79,13 @@ def render():
     if data["large_positions"]:
         df_large = pd.DataFrame([
             {
-                "회사명": l.company_name,
-                "주주명": l.owner,
-                "지분율": f"{l.ratio:.1f}%" if l.ratio else "-",
-                "보유량": f"{l.amount:,}" if l.amount else "-",
-                "해제일": l.release_date.isoformat() if l.release_date else "-",
+                "회사명": lockup.company_name,
+                "주주명": lockup.owner,
+                "지분율": f"{lockup.ratio:.1f}%" if lockup.ratio else "-",
+                "보유량": f"{lockup.amount:,}" if lockup.amount else "-",
+                "해제일": lockup.release_date.isoformat() if lockup.release_date else "-",
             }
-            for l in data["large_positions"][:10]
+            for lockup in data["large_positions"][:10]
         ])
 
         st.dataframe(

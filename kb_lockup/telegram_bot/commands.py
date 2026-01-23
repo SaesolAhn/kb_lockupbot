@@ -3,7 +3,7 @@
 from typing import Optional
 from pathlib import Path
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update
 from telegram.ext import ContextTypes
 from loguru import logger
 
@@ -138,7 +138,7 @@ class CommandHandlers:
             alert_manager = AlertManager(db)
             chat_id = update.effective_chat.id
 
-            reminder_id = await alert_manager.add_reminder(
+            await alert_manager.add_reminder(
                 chat_id=chat_id,
                 company_name=company_name,
                 days_before=days_before,
@@ -285,7 +285,7 @@ class CommandHandlers:
                 f"• 총 보호예수 건수: {stats.get('total_lockups', 0):,}건",
                 f"• 활성 알림 수: {stats.get('active_reminders', 0)}개",
                 "",
-                f"📅 다가오는 해제:",
+                "📅 다가오는 해제:",
                 f"  - 7일 이내: {stats.get('unlocks_7d', 0)}건",
                 f"  - 30일 이내: {stats.get('unlocks_30d', 0)}건",
                 "",

@@ -1,7 +1,6 @@
 """Analysis page - blockdeal and exit analysis"""
 
 import asyncio
-from datetime import date
 
 import streamlit as st
 import pandas as pd
@@ -140,31 +139,69 @@ def render_exit_tab():
 
         st.success(f"{len(results)}건의 결과")
 
-        df = pd.DataFrame([
-            {
-                "회사명": o.company_name,
-                "종목코드": o.stock_code or "-",
-                "주주명": o.owner,
-                "보유량": o.amount,
-                "지분율(%)": o.ratio,
-                "해제일": o.release_date.isoformat(),
-                "D-Day": o.days_until_unlock,
-                "예상청산일수": o.days_to_exit or "N/A",
-            }
-            for o in results
-        ])
+        # Check if we have market data
+        has_market_data = any(o.current_price for o in results)
 
-        st.dataframe(
-            df,
-            use_container_width=True,
-            hide_index=True,
-        )
+        if has_market_data:
+            df = pd.DataFrame([
+                {
+                    "회사명": o.company_name,
+                    "종목코드": o.stock_code or "-",
+                    "주주명": o.owner,
+                    "보유량": o.amount,
+                    "지분율(%)": o.ratio,
+                    "해제일": o.release_date.isoformat(),
+                    "D-Day": o.days_until_unlock,
+                    "현재가": o.current_price,
+                    "추정가치(억)": round(o.value_estimate / 100_000_000, 1) if o.value_estimate else None,
+                    "일평균거래량": o.avg_daily_volume,
+                    "예상청산일수": o.days_to_exit,
+                }
+                for o in results
+            ])
+
+            st.dataframe(
+                df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "보유량": st.column_config.NumberColumn(format="%d"),
+                    "현재가": st.column_config.NumberColumn(format="%d원"),
+                    "일평균거래량": st.column_config.NumberColumn(format="%d"),
+                    "예상청산일수": st.column_config.NumberColumn(format="%d일"),
+                },
+            )
+        else:
+            df = pd.DataFrame([
+                {
+                    "회사명": o.company_name,
+                    "종목코드": o.stock_code or "-",
+                    "주주명": o.owner,
+                    "보유량": o.amount,
+                    "지분율(%)": o.ratio,
+                    "해제일": o.release_date.isoformat(),
+                    "D-Day": o.days_until_unlock,
+                    "예상청산일수": o.days_to_exit or "N/A",
+                }
+                for o in results
+            ])
+
+            st.dataframe(
+                df,
+                use_container_width=True,
+                hide_index=True,
+            )
 
         # Note about market data
-        st.caption(
-            "※ 예상청산일수는 실제 거래량 데이터가 필요합니다. "
-            "현재는 시장 데이터 연동 전입니다."
-        )
+        from kb_lockup.analysis.market_data import get_market_data_service
+        market_svc = get_market_data_service()
+        if market_svc.is_available():
+            st.caption("✅ 시장 데이터 연동 활성화 - pykrx 사용 중 (KRX 거래량/가격 데이터)")
+        else:
+            st.caption(
+                "⚠️ 예상청산일수는 실제 거래량 데이터가 필요합니다. "
+                "`pip install pykrx` 설치 후 이용 가능합니다."
+            )
 
 
 async def analyze_blockdeal(

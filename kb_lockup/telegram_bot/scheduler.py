@@ -11,7 +11,6 @@ from loguru import logger
 from kb_lockup.config import settings
 from kb_lockup.storage.database import Database
 from kb_lockup.analysis.alerts import AlertManager
-from kb_lockup.export.formatter import MessageFormatter
 
 
 class ReminderScheduler:
@@ -146,7 +145,6 @@ class ReminderScheduler:
 
         try:
             # Get upcoming unlocks for next 7 days
-            from datetime import date
             unlocks = await db.get_upcoming_unlocks(days=7)
 
             if not unlocks:

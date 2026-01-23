@@ -7,13 +7,15 @@ from loguru import logger
 
 from kb_lockup.core.models import LockupData, ExitOpportunity
 from kb_lockup.storage.database import Database
+from kb_lockup.analysis.market_data import get_market_data_service, MarketDataService
 
 
 class ExitAnalyzer:
     """Analyze lockup data for exit trading opportunities"""
 
-    def __init__(self, db: Database):
+    def __init__(self, db: Database, market_data: Optional[MarketDataService] = None):
         self.db = db
+        self.market_data = market_data or get_market_data_service()
 
     async def analyze_exit_candidates(
         self,
@@ -56,22 +58,44 @@ class ExitAnalyzer:
 
         days_until = (lockup.release_date - date.today()).days
 
-        # TODO: Fetch real market data
-        # For now, use placeholder values
+        # Fetch real market data if stock code is available
         avg_daily_volume = None
         current_price = None
         days_to_exit = None
-
-        # Calculate days to exit if we have volume data
-        if avg_daily_volume and avg_daily_volume > 0:
-            # Assume can trade 10% of daily volume without major impact
-            tradeable_per_day = avg_daily_volume * 0.1
-            days_to_exit = int(lockup.amount / tradeable_per_day)
-
-        # Calculate value estimate if we have price
         value_estimate = None
-        if current_price and lockup.amount:
-            value_estimate = current_price * lockup.amount
+
+        if lockup.stock_code and self.market_data.is_available():
+            try:
+                # Get market data
+                market_info = self.market_data.get_stock_info(lockup.stock_code)
+
+                if market_info:
+                    current_price = market_info.get("current_price")
+                    avg_daily_volume = market_info.get("avg_volume_20d")
+
+                    # Calculate days to exit (assuming 10% daily participation)
+                    if avg_daily_volume and avg_daily_volume > 0:
+                        days_to_exit = self.market_data.estimate_exit_days(
+                            lockup.stock_code,
+                            lockup.amount,
+                            max_daily_participation=0.1,
+                        )
+
+                    # Calculate value estimate
+                    if current_price:
+                        value_estimate = self.market_data.estimate_value(
+                            lockup.stock_code,
+                            lockup.amount,
+                        )
+
+                    logger.debug(
+                        f"Market data for {lockup.stock_code}: "
+                        f"price={current_price:,}, vol={avg_daily_volume:,}, "
+                        f"exit_days={days_to_exit}"
+                    )
+
+            except Exception as e:
+                logger.warning(f"Failed to fetch market data for {lockup.stock_code}: {e}")
 
         return ExitOpportunity(
             company_name=lockup.company_name,
@@ -125,12 +149,57 @@ class ExitAnalyzer:
         Returns:
             Dict with impact analysis
         """
-        # TODO: Implement actual market data lookup
-        # This is a placeholder implementation
-        return {
+        result = {
             "stock_code": stock_code,
             "amount": amount,
             "estimated_days": None,
             "estimated_impact_percent": None,
+            "value_estimate": None,
+            "avg_daily_volume": None,
             "recommendation": "Market data not available",
         }
+
+        if not self.market_data.is_available():
+            return result
+
+        try:
+            market_info = self.market_data.get_stock_info(stock_code)
+
+            if not market_info:
+                return result
+
+            avg_volume = market_info.get("avg_volume_20d", 0)
+            current_price = market_info.get("current_price")
+
+            result["avg_daily_volume"] = avg_volume
+
+            # Calculate estimated exit days
+            if avg_volume and avg_volume > 0:
+                days_to_exit = self.market_data.estimate_exit_days(
+                    stock_code, amount, max_daily_participation=0.1
+                )
+                result["estimated_days"] = days_to_exit
+
+                # Calculate impact as % of daily volume
+                daily_impact = (amount / avg_volume) * 100 if avg_volume > 0 else None
+                result["estimated_impact_percent"] = round(daily_impact, 2) if daily_impact else None
+
+            # Calculate value estimate
+            if current_price:
+                result["value_estimate"] = current_price * amount
+
+            # Generate recommendation
+            if result["estimated_days"]:
+                if result["estimated_days"] <= 5:
+                    result["recommendation"] = "쉬운 청산 - 일주일 내 완료 가능"
+                elif result["estimated_days"] <= 20:
+                    result["recommendation"] = "보통 - 약 1개월 내 청산 가능"
+                elif result["estimated_days"] <= 60:
+                    result["recommendation"] = "어려움 - 2개월 이상 소요 예상"
+                else:
+                    result["recommendation"] = "매우 어려움 - 장기간 소요, 블록딜 검토 권장"
+
+        except Exception as e:
+            logger.error(f"Failed to estimate market impact for {stock_code}: {e}")
+
+        return result

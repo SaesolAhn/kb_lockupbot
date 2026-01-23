@@ -2,7 +2,7 @@
 
 import asyncio
 from datetime import date
-from typing import Optional, List, Tuple
+from typing import Optional, List
 from dataclasses import dataclass
 
 from loguru import logger
@@ -13,16 +13,12 @@ from kb_lockup.core.models import (
     LockupEntry,
     LockupResult,
     ProspectusInfo,
-    TableCandidate,
 )
-from kb_lockup.core.exceptions import ExtractionError, DartAPIError
+from kb_lockup.core.exceptions import ExtractionError
 from kb_lockup.dart.api import DartAPI
-from kb_lockup.dart.parser import DartParser
 from kb_lockup.dart.downloader import ProspectusDownloader
 from kb_lockup.extraction.table_finder import TableFinder
-from kb_lockup.extraction.qwen_extractor import QwenTableExtractor
 from kb_lockup.extraction.rule_extractor import RuleBasedExtractor, HybridExtractor
-from kb_lockup.extraction.scorer import TableScorer
 from kb_lockup.storage.database import Database
 
 

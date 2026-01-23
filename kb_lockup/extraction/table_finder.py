@@ -1,11 +1,11 @@
 """Identify lockup tables in documents"""
 
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 from loguru import logger
 
 from kb_lockup.core.models import TableCandidate
-from kb_lockup.core.constants import LOCKUP_KEYWORDS, SECTION_KEYWORDS
+from kb_lockup.core.constants import LOCKUP_KEYWORDS
 from kb_lockup.dart.parser import DartParser
 from kb_lockup.extraction.scorer import TableScorer
 

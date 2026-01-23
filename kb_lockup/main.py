@@ -230,7 +230,7 @@ def extract_ipos(days: int) -> None:
             click.echo(f"Total entries extracted: {total_entries}")
 
             stats = pipeline.get_stats()
-            click.echo(f"\nStats:")
+            click.echo("\nStats:")
             click.echo(f"  Documents: {stats['documents_processed']}")
             click.echo(f"  Tables found: {stats['tables_found']}")
             click.echo(f"  API requests: {stats['api_requests']}")

@@ -1,19 +1,21 @@
 """Blockdeal opportunity detection"""
 
-from datetime import date, timedelta
+from datetime import date
 from typing import List, Optional
 
 from loguru import logger
 
 from kb_lockup.core.models import LockupData, ExitOpportunity
 from kb_lockup.storage.database import Database
+from kb_lockup.analysis.market_data import get_market_data_service, MarketDataService
 
 
 class BlockdealAnalyzer:
     """Analyze lockup data for blockdeal opportunities"""
 
-    def __init__(self, db: Database):
+    def __init__(self, db: Database, market_data: Optional[MarketDataService] = None):
         self.db = db
+        self.market_data = market_data or get_market_data_service()
 
     async def find_opportunities(
         self,
@@ -61,12 +63,37 @@ class BlockdealAnalyzer:
 
         days_until = (lockup.release_date - date.today()).days
 
+        # Fetch market data if available
+        current_price = None
+        value_estimate = None
+        avg_daily_volume = None
+        days_to_exit = None
+
+        if lockup.stock_code and self.market_data.is_available():
+            try:
+                market_info = self.market_data.get_stock_info(lockup.stock_code)
+                if market_info:
+                    current_price = market_info.get("current_price")
+                    avg_daily_volume = market_info.get("avg_volume_20d")
+
+                    if current_price and lockup.amount:
+                        value_estimate = current_price * lockup.amount
+
+                    if avg_daily_volume and lockup.amount:
+                        days_to_exit = self.market_data.estimate_exit_days(
+                            lockup.stock_code,
+                            lockup.amount,
+                        )
+            except Exception as e:
+                logger.debug(f"Could not fetch market data for {lockup.stock_code}: {e}")
+
         # Calculate opportunity score
         # Higher score = larger position unlocking sooner
         score = self._calculate_score(
             ratio=lockup.ratio,
             amount=lockup.amount,
             days_until=days_until,
+            value_estimate=value_estimate,
         )
 
         return ExitOpportunity(
@@ -77,6 +104,10 @@ class BlockdealAnalyzer:
             ratio=lockup.ratio or 0,
             release_date=lockup.release_date,
             days_until_unlock=days_until,
+            current_price=current_price,
+            value_estimate=value_estimate,
+            avg_daily_volume=avg_daily_volume,
+            days_to_exit=days_to_exit,
             opportunity_score=score,
         )
 
@@ -85,6 +116,7 @@ class BlockdealAnalyzer:
         ratio: Optional[float],
         amount: Optional[int],
         days_until: int,
+        value_estimate: Optional[float] = None,
     ) -> float:
         """
         Calculate opportunity score
@@ -93,17 +125,24 @@ class BlockdealAnalyzer:
         - Larger ownership % = higher score
         - More shares = higher score
         - Sooner release = higher score
+        - Higher value = higher score (if market data available)
         """
+        import math
         score = 0.0
 
-        # Ratio component (0-50 points)
+        # Ratio component (0-40 points)
         if ratio:
-            score += min(ratio * 5, 50)
+            score += min(ratio * 4, 40)
 
-        # Amount component (0-30 points, log scale)
+        # Amount component (0-20 points, log scale)
         if amount:
-            import math
-            score += min(math.log10(amount + 1) * 5, 30)
+            score += min(math.log10(amount + 1) * 3, 20)
+
+        # Value component (0-20 points, log scale) - bonus if market data available
+        if value_estimate and value_estimate > 0:
+            # Score based on value in billions KRW
+            value_billions = value_estimate / 1_000_000_000
+            score += min(math.log10(value_billions + 1) * 10, 20)
 
         # Timing component (0-20 points, inverse of days)
         if days_until > 0:
