@@ -268,6 +268,37 @@ class CommandHandlers:
         finally:
             await db.close()
 
+    async def stats_handler(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+    ) -> None:
+        """Handle /stats command - show database statistics"""
+        db = await self._get_db()
+
+        try:
+            stats = await db.get_stats()
+
+            lines = [
+                "📊 **KB Lockup 통계**\n",
+                f"• 총 회사 수: {stats.get('total_companies', 0):,}개",
+                f"• 총 보호예수 건수: {stats.get('total_lockups', 0):,}건",
+                f"• 활성 알림 수: {stats.get('active_reminders', 0)}개",
+                "",
+                f"📅 다가오는 해제:",
+                f"  - 7일 이내: {stats.get('unlocks_7d', 0)}건",
+                f"  - 30일 이내: {stats.get('unlocks_30d', 0)}건",
+                "",
+                f"마지막 업데이트: {stats.get('last_update', 'N/A')}",
+            ]
+
+            await update.message.reply_text(
+                "\n".join(lines),
+                parse_mode="Markdown",
+            )
+        finally:
+            await db.close()
+
     async def button_handler(
         self,
         update: Update,
@@ -292,3 +323,8 @@ class CommandHandlers:
             await query.message.reply_text(
                 f"알림 설정: /remind {company} <일수>"
             )
+
+        elif data.startswith("export:"):
+            company = data.split(":", 1)[1]
+            context.args = [company]
+            await self.export_handler(update, context)

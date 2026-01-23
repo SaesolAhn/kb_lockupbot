@@ -166,6 +166,9 @@ class MessageFormatter:
 /search <회사명 또는 종목코드>
 예: /search 삼성전자
 
+💡 인라인 검색: @봇이름 검색어
+예: @kblockupbot 삼성
+
 **다가오는 해제**
 /upcoming [일수]
 예: /upcoming 30
@@ -186,5 +189,10 @@ class MessageFormatter:
 /export <회사명>
 예: /export 네이버
 
+**통계**
+/stats - 데이터베이스 통계
+
 /help - 이 도움말
+
+📅 매주 월요일 09:00에 주간 해제 예정 알림이 전송됩니다.
 """
