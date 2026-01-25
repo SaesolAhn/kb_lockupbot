@@ -34,6 +34,9 @@ class Database:
         self._conn.row_factory = aiosqlite.Row
         await self._conn.execute("PRAGMA foreign_keys = ON")
         logger.debug(f"Connected to database: {self.db_path}")
+        
+        # Auto-initialize schema if it doesn't exist
+        await self._ensure_schema()
 
     async def close(self) -> None:
         """Close database connection"""
@@ -46,6 +49,22 @@ class Database:
         if self._conn is None:
             raise DatabaseError("Database not connected")
         return self._conn
+
+    async def _ensure_schema(self) -> None:
+        """Ensure database schema exists, initialize if needed"""
+        try:
+            # Check if lockup_data table exists
+            cursor = await self._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='lockup_data'"
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                # Schema doesn't exist, initialize it
+                logger.info("Schema not found, initializing database schema")
+                await self.init_schema()
+        except Exception as e:
+            logger.warning(f"Error checking schema: {e}, attempting to initialize")
+            await self.init_schema()
 
     async def init_schema(self) -> None:
         """Initialize database schema"""
@@ -416,6 +435,53 @@ class Database:
         cursor = await self.conn.execute(sql, (company_name,))
         await self.conn.commit()
         return cursor.rowcount
+
+    async def update_release_date(self, lockup_id: int, release_date: date) -> bool:
+        """Update release_date for a lockup entry"""
+        sql = "UPDATE lockup_data SET release_date = ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
+        cursor = await self.conn.execute(sql, (release_date.isoformat(), lockup_id))
+        await self.conn.commit()
+        return cursor.rowcount > 0
+
+    async def get_lockups_missing_release_date(self) -> List[LockupData]:
+        """Get lockups that have period_months but no release_date"""
+        sql = """
+            SELECT * FROM lockup_data
+            WHERE release_date IS NULL
+            AND lock_period_months IS NOT NULL
+            AND stock_code IS NOT NULL
+        """
+        cursor = await self.conn.execute(sql)
+        rows = await cursor.fetchall()
+        return [self._row_to_lockup_data(row) for row in rows]
+
+    async def update_company_listing_date(self, stock_code: str, listing_date: date) -> int:
+        """Update listing_date for all lockups with given stock_code"""
+        sql = """
+            UPDATE lockup_data
+            SET listing_date = ?, updated_at = datetime('now', 'localtime')
+            WHERE stock_code = ?
+        """
+        cursor = await self.conn.execute(sql, (listing_date.isoformat(), stock_code))
+        await self.conn.commit()
+        return cursor.rowcount
+
+    async def get_all_lockups(
+        self,
+        limit: int = 500,
+        order_by: str = "release_date",
+    ) -> List[LockupData]:
+        """Get all lockup data, ordered by release_date (nulls last)"""
+        sql = f"""
+            SELECT * FROM lockup_data
+            ORDER BY
+                CASE WHEN release_date IS NULL THEN 1 ELSE 0 END,
+                {order_by} ASC
+            LIMIT ?
+        """
+        cursor = await self.conn.execute(sql, (limit,))
+        rows = await cursor.fetchall()
+        return [self._row_to_lockup_data(row) for row in rows]
 
     async def get_pending_prospectuses(self, limit: int = 100) -> List[dict]:
         """Get prospectuses that haven't been processed"""

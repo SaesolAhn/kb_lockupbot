@@ -212,6 +212,56 @@ def search_company(query: str) -> None:
     asyncio.run(_search())
 
 
+@cli.command("api-status")
+def api_status() -> None:
+    """Show DART API usage status"""
+    from kb_lockup.dart.api import get_daily_request_count, get_remaining_requests, CORP_CODES_CACHE_FILE
+    import time
+
+    count = get_daily_request_count()
+    remaining = get_remaining_requests()
+    limit = settings.dart_rate_limit
+
+    click.echo("\nDART API Status")
+    click.echo("=" * 40)
+    click.echo(f"Daily limit:        {limit:,}")
+    click.echo(f"Used today:         {count:,}")
+    click.echo(f"Remaining:          {remaining:,}")
+    click.echo(f"Usage:              {count/limit*100:.1f}%")
+
+    # Check corp codes cache
+    if CORP_CODES_CACHE_FILE.exists():
+        cache_age = time.time() - CORP_CODES_CACHE_FILE.stat().st_mtime
+        hours_old = cache_age / 3600
+        click.echo(f"\nCorp codes cache:   {hours_old:.1f}h old")
+    else:
+        click.echo("\nCorp codes cache:   Not cached")
+
+    click.echo("=" * 40)
+
+
+@cli.command("reset-api-count")
+@click.confirmation_option(prompt="Are you sure you want to reset the daily API count?")
+def reset_api_count() -> None:
+    """Reset daily API request count"""
+    from kb_lockup.dart.api import reset_request_count
+    reset_request_count()
+    click.echo("Daily API request count has been reset.")
+
+
+@cli.command("refresh-cache")
+def refresh_cache() -> None:
+    """Refresh the corporation codes cache from DART"""
+    from kb_lockup.dart.api import DartAPI
+
+    async def _refresh():
+        async with DartAPI() as api:
+            await api.load_corp_codes(force_refresh=True)
+            click.echo("Corporation codes cache refreshed.")
+
+    asyncio.run(_refresh())
+
+
 @cli.command("extract-ipos")
 @click.option("--days", "-d", default=90, help="Look back period in days")
 def extract_ipos(days: int) -> None:
@@ -237,6 +287,105 @@ def extract_ipos(days: int) -> None:
             click.echo(f"  Errors: {stats['errors']}")
 
     asyncio.run(_extract())
+
+
+@cli.command("fix-release-dates")
+@click.option("--dry-run", is_flag=True, help="Show what would be updated without making changes")
+def fix_release_dates(dry_run: bool) -> None:
+    """Calculate missing release_date from listing_date + period_months"""
+    from dateutil.relativedelta import relativedelta
+    from kb_lockup.storage.database import Database
+    from kb_lockup.analysis.market_data import get_market_data_service
+
+    async def _fix():
+        market_svc = get_market_data_service()
+
+        if not market_svc.is_available():
+            click.echo("Error: pykrx not installed. Run: pip install pykrx", err=True)
+            raise click.Abort()
+
+        async with Database() as db:
+            # Get ALL lockups missing release_date (not just those with period_months)
+            cursor = await db.conn.execute(
+                "SELECT * FROM lockup_data WHERE release_date IS NULL AND stock_code IS NOT NULL"
+            )
+            rows = await cursor.fetchall()
+            lockups = [db._row_to_lockup_data(row) for row in rows]
+
+            if not lockups:
+                click.echo("No lockups with missing release_date found.")
+                return
+
+            click.echo(f"Found {len(lockups)} lockups needing release_date")
+            click.echo("-" * 60)
+
+            # Group by stock_code to minimize API calls
+            by_stock = {}
+            for l in lockups:
+                if l.stock_code not in by_stock:
+                    by_stock[l.stock_code] = []
+                by_stock[l.stock_code].append(l)
+
+            updated = 0
+            deleted = 0
+            failed = 0
+
+            for stock_code, entries in by_stock.items():
+                company_name = entries[0].company_name
+
+                # Fetch listing date from pykrx
+                click.echo(f"\n{company_name} ({stock_code}): fetching listing date...")
+                listing_date = market_svc.get_listing_date(stock_code)
+
+                if not listing_date:
+                    click.echo(f"  ⚠️  Could not get listing date")
+                    failed += len(entries)
+                    continue
+
+                click.echo(f"  📅 Listing date: {listing_date}")
+
+                # Update listing_date for the company
+                if not dry_run:
+                    await db.update_company_listing_date(stock_code, listing_date)
+
+                # Update each entry
+                for entry in entries:
+                    if entry.lock_period_months:
+                        # Use relativedelta for proper month arithmetic
+                        release_date = listing_date + relativedelta(months=entry.lock_period_months)
+                        click.echo(f"  → {entry.owner}: {entry.lock_period_months}개월 → {release_date}")
+                    else:
+                        # No period_months: use listing date as release date
+                        release_date = listing_date
+                        click.echo(f"  → {entry.owner}: (no period) → {release_date} (listing date)")
+
+                    if not dry_run:
+                        # Check if a record with this (company, owner, release_date) already exists
+                        check_cursor = await db.conn.execute(
+                            "SELECT id FROM lockup_data WHERE company_name = ? AND owner = ? AND release_date = ?",
+                            (entry.company_name, entry.owner, release_date.isoformat())
+                        )
+                        existing = await check_cursor.fetchone()
+
+                        if existing:
+                            # Delete the current NULL record (duplicate)
+                            click.echo(f"    ⚠️  Duplicate found, deleting NULL record")
+                            await db.conn.execute("DELETE FROM lockup_data WHERE id = ?", (entry.id,))
+                            await db.conn.commit()
+                            deleted += 1
+                        else:
+                            await db.update_release_date(entry.id, release_date)
+                            updated += 1
+                    else:
+                        updated += 1
+
+            click.echo("\n" + "=" * 60)
+            if dry_run:
+                click.echo(f"DRY RUN: Would update {updated} records ({failed} failed)")
+            else:
+                click.echo(f"Updated {updated} records, deleted {deleted} duplicates ({failed} could not be fixed)")
+
+    asyncio.run(_fix())
 
 
 if __name__ == "__main__":

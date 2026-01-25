@@ -197,6 +197,41 @@ class MarketDataService:
         self._cache_time.clear()
 
 
+    def get_listing_date(self, stock_code: str) -> Optional[date]:
+        """
+        Get the listing (first trading) date for a stock.
+
+        Args:
+            stock_code: 6-digit KRX stock code
+
+        Returns:
+            First trading date or None if unavailable
+        """
+        if not PYKRX_AVAILABLE:
+            return None
+
+        stock_code = stock_code.strip().zfill(6)
+
+        try:
+            # Get historical data going back far enough to find listing
+            df = stock.get_market_ohlcv(
+                "19900101",  # Start from 1990
+                date.today().strftime("%Y%m%d"),
+                stock_code,
+            )
+
+            if df.empty:
+                return None
+
+            # First date in the dataframe is the listing date
+            first_date = df.index[0]
+            return first_date.date() if hasattr(first_date, 'date') else first_date
+
+        except Exception as e:
+            logger.warning(f"Failed to get listing date for {stock_code}: {e}")
+            return None
+
+
 # Singleton instance
 _market_data_service: Optional[MarketDataService] = None
 

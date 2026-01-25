@@ -33,6 +33,7 @@ lxml>=5.0
 tenacity>=8.0
 loguru>=0.7
 click>=8.0
+python-dateutil>=2.8
 
 # Market Data
 pykrx>=1.0
