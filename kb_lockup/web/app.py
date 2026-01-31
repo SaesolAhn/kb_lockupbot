@@ -2,6 +2,8 @@
 
 import streamlit as st
 
+from kb_lockup.web.utils import run_async
+
 st.set_page_config(
     page_title="KB Lockup",
     page_icon="🔒",
@@ -21,7 +23,7 @@ def main():
     # Navigation
     page = st.sidebar.selectbox(
         "페이지 선택",
-        ["대시보드", "검색", "분석", "관리"],
+        ["대시보드 (Unstaking)", "데이터 관리"],
         index=0,
     )
 
@@ -30,25 +32,19 @@ def main():
         """
         **KB Lockup**
 
-        한국 상장사 보호예수 일정 추적 시스템
+        SEIBro 기반 의무보유 현황 대시보드
 
-        - DART 공시 데이터 기반
-        - 실시간 알림 지원
-        - Excel 내보내기
+        - AI 블록딜 위험 분석
+        - 실시간 주가 연동
         """
     )
 
     # Page routing
-    if page == "대시보드":
-        from kb_lockup.web.pages.dashboard import render
+    # Page routing
+    if "대시보드" in page:
+        from kb_lockup.web.pages.unstaking_dashboard import render
         render()
-    elif page == "검색":
-        from kb_lockup.web.pages.search import render
-        render()
-    elif page == "분석":
-        from kb_lockup.web.pages.analysis import render
-        render()
-    elif page == "관리":
+    elif page == "데이터 관리":
         render_admin()
 
 
@@ -62,28 +58,32 @@ def render_admin():
 
     with col1:
         if st.button("📦 데이터베이스 초기화"):
-            import asyncio
             from kb_lockup.storage.database import Database
 
             async def init_db():
                 async with Database() as db:
                     await db.init_schema()
 
-            asyncio.run(init_db())
-            st.success("데이터베이스가 초기화되었습니다.")
-            st.session_state.db_initialized = True
+            try:
+                run_async(init_db())
+                st.success("데이터베이스가 초기화되었습니다.")
+                st.session_state.db_initialized = True
+            except Exception as e:
+                st.error(f"초기화 실패: {e}")
 
     with col2:
         if st.button("🗑️ 캐시 삭제"):
-            import asyncio
             from kb_lockup.storage.cache import Cache
 
             async def clear_cache():
                 async with Cache() as cache:
                     return await cache.clear_all()
 
-            count = asyncio.run(clear_cache())
-            st.success(f"{count}개의 캐시 항목이 삭제되었습니다.")
+            try:
+                count = run_async(clear_cache())
+                st.success(f"{count}개의 캐시 항목이 삭제되었습니다.")
+            except Exception as e:
+                st.error(f"캐시 삭제 실패: {e}")
 
     st.header("추출 작업")
 

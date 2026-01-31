@@ -1,6 +1,5 @@
 """Search page - search and filter lockup data"""
 
-import asyncio
 from datetime import date
 
 import streamlit as st
@@ -8,6 +7,7 @@ import pandas as pd
 
 from kb_lockup.storage.database import Database
 from kb_lockup.export.excel import ExcelExporter
+from kb_lockup.web.utils import run_async
 
 
 def render():
@@ -56,7 +56,7 @@ def render():
 
     # Perform search
     if search_button or query:
-        results = asyncio.run(search_lockups(query, min_ratio))
+        results = run_async(search_lockups(query, min_ratio))
 
         if not results:
             st.warning("검색 결과가 없습니다.")

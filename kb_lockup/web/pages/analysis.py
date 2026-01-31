@@ -1,13 +1,12 @@
 """Analysis page - blockdeal and exit analysis"""
 
-import asyncio
-
 import streamlit as st
 import pandas as pd
 
 from kb_lockup.storage.database import Database
 from kb_lockup.analysis.blockdeal import BlockdealAnalyzer
 from kb_lockup.analysis.exit_analysis import ExitAnalyzer
+from kb_lockup.web.utils import run_async
 
 
 def render():
@@ -59,7 +58,7 @@ def render_blockdeal_tab():
 
     if st.button("분석 실행", key="bd_analyze"):
         with st.spinner("분석 중..."):
-            opportunities = asyncio.run(
+            opportunities = run_async(
                 analyze_blockdeal(days_ahead, min_ratio, min_amount or None)
             )
 
@@ -131,7 +130,7 @@ def render_exit_tab():
 
     if st.button("분석 실행", key="exit_analyze"):
         with st.spinner("분석 중..."):
-            results = asyncio.run(analyze_exit(days_ahead, min_ratio))
+            results = run_async(analyze_exit(days_ahead, min_ratio))
 
         if not results:
             st.info("해당 조건의 데이터가 없습니다.")

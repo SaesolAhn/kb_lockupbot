@@ -22,8 +22,19 @@ class Settings(BaseSettings):
 
     # Extraction settings
     qwen_model: str = "qwen-plus"
-    qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    qwen_base_url: str = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+    qwen_api_base_url: str = ""  # Alternative env var name
     min_extraction_score: float = 0.6
+
+    def get_qwen_base_url(self) -> str:
+        """Get Qwen base URL, checking alternative env var"""
+        if self.qwen_api_base_url:
+            url = self.qwen_api_base_url
+            # Ensure /v1 suffix
+            if not url.endswith("/v1"):
+                url = url.rstrip("/") + "/v1"
+            return url
+        return self.qwen_base_url
 
     # Telegram settings
     reminder_check_hour: int = 8

@@ -12,6 +12,11 @@ openai>=1.0
 
 # Database
 aiosqlite>=0.19
+sqlalchemy>=2.0
+psycopg2-binary>=2.9
+
+# HTTP
+requests>=2.31
 
 # Telegram
 python-telegram-bot>=20.0
