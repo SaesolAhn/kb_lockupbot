@@ -18,6 +18,7 @@ from kb_lockup.core.exceptions import ExtractionError
 from kb_lockup.dart.api import DartAPI
 from kb_lockup.dart.downloader import ProspectusDownloader
 from kb_lockup.extraction.table_finder import TableFinder
+from kb_lockup.extraction.ai_table_finder import AITableFinder
 from kb_lockup.extraction.rule_extractor import RuleBasedExtractor, HybridExtractor
 from kb_lockup.storage.database import Database
 
@@ -118,16 +119,7 @@ class ExtractionPipeline:
         force: bool = False,
     ) -> LockupResult:
         """
-        Extract lockup data for a single company
-
-        Args:
-            company_name: Company name or stock code
-            start_date: Search start date (YYYYMMDD)
-            end_date: Search end date (YYYYMMDD)
-            force: Re-extract even if already processed
-
-        Returns:
-            LockupResult with extracted entries
+        Extract lockup data for a single company (aligned with test_lockup_extraction.py)
         """
         logger.info(f"Starting extraction for: {company_name}")
 
@@ -136,77 +128,117 @@ class ExtractionPipeline:
         if not company:
             raise ExtractionError(f"Company not found: {company_name}")
 
-        logger.info(f"Found company: {company.corp_name} ({company.corp_code})")
+        logger.info(f"Found company: {company.corp_name} ({company.corp_code}, stock={company.stock_code})")
 
         # Step 2: Search for prospectuses
         prospectuses = await self.api.search_prospectuses(
             corp_code=company.corp_code,
-            bgn_de=start_date,
-            end_de=end_date,
+            bgn_de=start_date or "20240101",
+            end_de=end_date or "20260201",
         )
 
         if not prospectuses:
             logger.warning(f"No prospectus filings found for {company.corp_name}")
-            return LockupResult(
-                company=company,
-                rcept_no="",
-                entries=[],
-                confidence_score=0,
+            return LockupResult(company=company, rcept_no="", entries=[], confidence_score=0)
+
+        # Filter to 증권신고서, prioritizing correction filings, exclude problematic types
+        targets = [
+            p for p in prospectuses 
+            if "증권신고서" in p.report_nm 
+            and "[발행조건확정]" not in p.report_nm
+            and "[첨부정정]" not in p.report_nm
+        ]
+        targets.sort(key=lambda x: x.rcept_no, reverse=True)
+        
+        if not targets:
+            # Fallback: try 증권신고서 without exclusions
+            targets = [p for p in prospectuses if "증권신고서" in p.report_nm]
+            targets.sort(key=lambda x: x.rcept_no, reverse=True)
+            if not targets:
+                logger.warning(f"No 증권신고서 found for {company.corp_name}")
+                return LockupResult(company=company, rcept_no="", entries=[], confidence_score=0)
+
+        # Use the most recent valid filing
+        target = targets[0]
+        logger.info(f"Using: {target.report_nm} ({target.rcept_no})")
+
+        # Check if already processed
+        if not force and await self.db.is_prospectus_processed(target.rcept_no):
+            logger.info(f"Already processed: {target.rcept_no}, skipping")
+            return LockupResult(company=company, rcept_no=target.rcept_no, entries=[], confidence_score=0)
+
+        # Step 3: Download document
+        downloader = ProspectusDownloader(self.api)
+        content = await downloader.download_document(target.rcept_no)
+        logger.info(f"Document: {len(content)} chars")
+
+        # Step 4: AI Table Finding
+        ai_finder = AITableFinder()
+        tables = ai_finder.find_lockup_tables(content, max_tables=2)
+        
+        table_method = "ai" if tables else "none"
+        self.stats.tables_found += len(tables)
+
+        if not tables:
+            logger.warning(f"No lockup tables found in {target.rcept_no}")
+            await self.db.mark_prospectus_processed(
+                rcept_no=target.rcept_no, corp_code=company.corp_code,
+                report_nm=target.report_nm, rcept_dt=target.rcept_dt,
+                method="none", tables_found=0,
             )
+            return LockupResult(company=company, rcept_no=target.rcept_no, entries=[], confidence_score=0)
 
-        logger.info(f"Found {len(prospectuses)} prospectus filings")
+        # Step 5: Rule-based extraction from AI-identified tables
+        extractor = RuleBasedExtractor()
+        all_entries: List[LockupEntry] = []
 
-        # Step 3: Process each prospectus
-        all_entries = []
-        best_result: Optional[LockupResult] = None
-        best_score = 0.0
+        for table_tag in tables:
+            rows_count = len(table_tag.find_all("tr"))
+            logger.info(f"Extracting from table with {rows_count} rows")
+            entries = extractor.extract_from_table(table_tag, listing_date=company.listing_date)
+            logger.info(f"Got {len(entries)} entries from this table")
+            all_entries.extend(entries)
 
-        for prospectus in prospectuses:
-            # Check if already processed
-            if not force and await self.db.is_prospectus_processed(prospectus.rcept_no):
-                logger.debug(f"Skipping already processed: {prospectus.rcept_no}")
-                continue
+        # Deduplicate
+        if all_entries:
+            all_entries = self._deduplicate_entries(all_entries)
 
-            try:
-                result = await self._process_prospectus(company, prospectus)
-
-                if result.entries:
-                    all_entries.extend(result.entries)
-
-                    if result.confidence_score > best_score:
-                        best_score = result.confidence_score
-                        best_result = result
-
-                self.stats.documents_processed += 1
-
-            except Exception as e:
-                logger.error(f"Failed to process {prospectus.rcept_no}: {e}")
-                self.stats.errors += 1
-
-                # Record failed processing
-                await self.db.mark_prospectus_processed(
-                    rcept_no=prospectus.rcept_no,
-                    corp_code=company.corp_code,
-                    report_nm=prospectus.report_nm,
-                    rcept_dt=prospectus.rcept_dt,
-                    method="qwen",
-                    tables_found=0,
-                    error=str(e),
-                )
-
-        self.stats.companies_processed += 1
         self.stats.entries_extracted += len(all_entries)
+        self.stats.companies_processed += 1
+        self.stats.documents_processed += 1
+        if table_method == "ai":
+            self.stats.ai_extractions += 1
+        else:
+            self.stats.rule_extractions += 1
 
-        # Return best result or create one from all entries
-        if best_result:
-            best_result.entries = all_entries  # Include all entries
-            return best_result
+        # Step 6: Save to database (upsert company FIRST for FK)
+        await self.db.upsert_company(company)
+
+        if all_entries:
+            await self.db.insert_lockup_entries(
+                entries=all_entries,
+                company_name=company.corp_name,
+                stock_code=company.stock_code,
+                source_rcept_no=target.rcept_no,
+                source_section=tables[0].name if hasattr(tables[0], 'name') else "lockup_table",
+                extraction_score=1.0 if table_method == "ai" else 0.5,
+            )
+            logger.info(f"Inserted {len(all_entries)} entries into database")
+
+        # Mark as processed
+        await self.db.mark_prospectus_processed(
+            rcept_no=target.rcept_no, corp_code=company.corp_code,
+            report_nm=target.report_nm, rcept_dt=target.rcept_dt,
+            method=table_method, tables_found=len(tables),
+        )
 
         return LockupResult(
             company=company,
-            rcept_no=prospectuses[0].rcept_no if prospectuses else "",
+            rcept_no=target.rcept_no,
+            section_title=tables[0].name if hasattr(tables[0], 'name') else None,
             entries=all_entries,
-            confidence_score=best_score,
+            extraction_method=table_method,
+            confidence_score=1.0 if all_entries else 0,
         )
 
     async def _find_company(self, query: str) -> Optional[Company]:
@@ -227,6 +259,9 @@ class ExtractionPipeline:
     ) -> LockupResult:
         """Process a single prospectus document"""
         logger.info(f"Processing: {prospectus.report_nm} ({prospectus.rcept_no})")
+
+        # Save company info FIRST to satisfy foreign key constraints
+        await self.db.upsert_company(company)
 
         # Download document
         downloader = ProspectusDownloader(self.api)
@@ -306,8 +341,8 @@ class ExtractionPipeline:
             tables_found=len(candidates),
         )
 
-        # Save company info
-        await self.db.upsert_company(company)
+        # Company info already saved at start of method
+        # await self.db.upsert_company(company)
 
         return LockupResult(
             company=company,

@@ -93,7 +93,7 @@ class QwenTableExtractor:
         from openai import OpenAI
         self.client = OpenAI(
             api_key=self.api_key,
-            base_url=settings.qwen_base_url,
+            base_url=settings.qwen_base_url_v1,
         )
 
     def extract_tables(

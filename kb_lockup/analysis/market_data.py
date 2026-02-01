@@ -196,6 +196,79 @@ class MarketDataService:
         self._cache.clear()
         self._cache_time.clear()
 
+    def get_listed_shares(self, stock_code: str) -> Optional[int]:
+        """
+        Get the number of listed shares (상장주식수) for a stock.
+
+        Args:
+            stock_code: 6-digit KRX stock code
+
+        Returns:
+            Number of listed shares or None if unavailable
+        """
+        if not PYKRX_AVAILABLE:
+            return None
+
+        if not stock_code:
+            return None
+
+        stock_code = stock_code.strip().zfill(6)
+
+        try:
+            end_date = date.today()
+            # Try to get market cap data which includes listed shares
+            market_cap_df = stock.get_market_cap(
+                end_date.strftime("%Y%m%d"),
+                end_date.strftime("%Y%m%d"),
+                stock_code,
+            )
+
+            if market_cap_df.empty:
+                # Try previous trading day
+                for days_back in range(1, 10):
+                    try_date = end_date - timedelta(days=days_back)
+                    market_cap_df = stock.get_market_cap(
+                        try_date.strftime("%Y%m%d"),
+                        try_date.strftime("%Y%m%d"),
+                        stock_code,
+                    )
+                    if not market_cap_df.empty:
+                        break
+
+            if market_cap_df.empty:
+                return None
+
+            listed_shares = int(market_cap_df.iloc[0]["상장주식수"])
+            return listed_shares
+
+        except Exception as e:
+            logger.warning(f"Failed to get listed shares for {stock_code}: {e}")
+            return None
+
+    def calculate_ownership_ratio(
+        self,
+        stock_code: str,
+        shares: int,
+    ) -> Optional[float]:
+        """
+        Calculate ownership ratio (지분율) for given shares.
+
+        Args:
+            stock_code: 6-digit KRX stock code
+            shares: Number of shares held
+
+        Returns:
+            Ownership percentage (0-100) or None if unavailable
+        """
+        if not shares or shares <= 0:
+            return None
+
+        listed_shares = self.get_listed_shares(stock_code)
+        if not listed_shares or listed_shares <= 0:
+            return None
+
+        ratio = (shares / listed_shares) * 100
+        return round(ratio, 2)
 
     def get_listing_date(self, stock_code: str) -> Optional[date]:
         """

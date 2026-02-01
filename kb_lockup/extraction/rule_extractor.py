@@ -1,7 +1,8 @@
 """Rule-based table extraction as fallback"""
 
-from typing import List, Optional, Dict
-from datetime import date
+from typing import List, Optional, Dict, Any, Tuple
+from datetime import date, timedelta
+import re
 
 from bs4 import BeautifulSoup, Tag
 from loguru import logger
@@ -13,9 +14,12 @@ from kb_lockup.extraction.normalizer import KoreanNormalizer
 
 class RuleBasedExtractor:
     """
-    Rule-based extraction for lockup tables when AI extraction is unavailable.
-
-    Uses column header detection and pattern matching to extract data.
+    Rule-based extraction for lockup tables.
+    
+    Implements:
+    1. Dynamic Header Mapping (Anchor System)
+    2. Stateful Context Propagation (handling merged cells)
+    3. Smart Indexing for Partial Rows
     """
 
     def __init__(self):
@@ -28,13 +32,6 @@ class RuleBasedExtractor:
     ) -> List[LockupEntry]:
         """
         Extract lockup entries from a table candidate using rules
-
-        Args:
-            candidate: TableCandidate with raw HTML
-            listing_date: Company listing date for relative date calculation
-
-        Returns:
-            List of LockupEntry objects
         """
         if not candidate.raw_html:
             return []
@@ -54,172 +51,345 @@ class RuleBasedExtractor:
     ) -> List[LockupEntry]:
         """
         Extract lockup entries from a BeautifulSoup table
-
-        Args:
-            table: BeautifulSoup table element
-            listing_date: Company listing date
         """
         rows = self._parse_table_rows(table)
-
         if len(rows) < 2:
             return []
 
-        # Identify column mappings from headers
-        headers = rows[0]
-        column_map = self._identify_columns(headers)
-
-        if column_map.get("owner") is None:
-            logger.debug("No owner column found, skipping table")
+        # 1. Dynamic Header Mapping (The Anchor System)
+        # Scan the first few rows to find the header
+        header_row_idx, anchors = self._find_anchors(rows)
+        
+        if not anchors:
+            logger.debug("Required anchors not found in table")
             return []
 
         entries = []
+        
+        # 2. Stateful Context Propagation
+        persistent_metadata = {
+            "category": "",
+            "owner": "",
+            "relation": ""
+        }
 
-        for row in rows[1:]:
-            entry = self._extract_row(row, column_map, listing_date)
-            if entry:
-                entries.append(entry)
+        # Iterate through data rows
+        for i in range(header_row_idx + 1, len(rows)):
+            row = rows[i]
+            
+            # Skip empty rows
+            if not any(row):
+                continue
+                
+            # Skip summary rows (normalize spaces for matching)
+            row_start = " ".join(row[:3]).replace(" ", "")
+            if any(kw in row_start for kw in ["소계", "합계", "총계"]):
+                continue
 
-        logger.info(f"Rule-based extraction: {len(entries)} entries from {len(rows)-1} rows")
+            # Determine if this is a "Full Row" or "Short Row"
+            # We use the anchors to decide. 
+            # If the row length matches the header length roughly, it's likely a full row (or close to it)
+            # But the most robust way described is:
+            # "If a row contains a Shareholder Name: Update the dictionary"
+            
+            current_metadata = persistent_metadata.copy()
+            
+            # Check for Name anchor presence in this row
+            name_idx = anchors.get("name")
+            relation_idx = anchors.get("relation")
+            category_idx = anchors.get("category") # Optional
+            
+            # Heuristic: If row has enough cells to cover the name index, and that cell is not empty/numeric
+            # likely it's a full row or at least contains the name.
+            # However, with merged cells, the HTML parser might return empty strings for subsequent rows
+            # or fewer cells if we are processing raw TRs.
+            # parser.py's parse_table_to_rows handles rowspan by inserting empty strings.
+            # So "Short Row" in our list of lists representation means empty strings in the merged columns.
+            
+            # Update metadata if values exist at the anchor positions
+            if name_idx is not None and name_idx < len(row):
+                val = row[name_idx].strip()
+                if val:
+                    # New shareholder found
+                    current_metadata["owner"] = val
+                    persistent_metadata["owner"] = val
+                    
+                    # Update other metadata only when name changes (usually they go together)
+                    if category_idx is not None and category_idx < len(row):
+                        cat_val = row[category_idx].strip()
+                        if cat_val:
+                            persistent_metadata["category"] = cat_val
+                        current_metadata["category"] = persistent_metadata["category"]
+                        
+                    if relation_idx is not None and relation_idx < len(row):
+                        rel_val = row[relation_idx].strip()
+                        if rel_val:
+                            persistent_metadata["relation"] = rel_val
+                        current_metadata["relation"] = persistent_metadata["relation"]
+            
+            # If we still don't have an owner, something is wrong or it's a continuation of previous without proper structure
+            if not current_metadata["owner"]:
+                continue
+
+            # 3. Smart Indexing for Partial Rows
+            # Extract Quantity and Period
+            # Strategy: Find the period cell first (most distinctive), then locate qty
+            period_val = ""
+            qty_val = ""
+
+            # Try to find Period column dynamically in this row
+            found_period_idx = -1
+            for c_idx, cell in enumerate(row):
+                if self._is_period_string(cell):
+                    period_val = cell
+                    found_period_idx = c_idx
+                    break
+
+            if found_period_idx != -1:
+                # Find quantity: look left for a numeric cell that's NOT a percentage
+                # Search up to 8 cols left to handle tables with many columns between qty and period
+                for offset in range(1, min(found_period_idx + 1, 8)):
+                    candidate = row[found_period_idx - offset].strip()
+                    if candidate and not candidate.endswith("%") and candidate != "-":
+                        # Check if it looks like a number
+                        cleaned = candidate.replace(",", "").replace("주", "")
+                        if cleaned.isdigit() or re.match(r"[\d,.]+", cleaned):
+                            qty_val = candidate
+                            break
+            else:
+                # Fallback to fixed anchors
+                p_anchor = anchors.get("period")
+                q_anchor = anchors.get("qty")
+                if p_anchor is not None and p_anchor < len(row):
+                    period_val = row[p_anchor]
+                if q_anchor is not None and q_anchor < len(row):
+                    qty_val = row[q_anchor]
+
+            # 4. Data Normalization and Entry Creation
+            if qty_val or period_val:
+                entry = self._create_entry(
+                    current_metadata, 
+                    qty_val, 
+                    period_val, 
+                    listing_date
+                )
+                if entry:
+                    entries.append(entry)
+
         return entries
 
+    def _find_anchors(self, rows: List[List[str]]) -> Tuple[int, Dict[str, int]]:
+        """
+        Scan header rows to find column indices.
+        Handles multi-row headers by scanning ALL header rows (up to 5)
+        and accumulating anchors across them.
+        Returns: (last_header_row_index, anchors_dict)
+        """
+        anchors: Dict[str, int] = {}
+        first_header_idx = -1
+        last_header_idx = -1
+
+        # Scan first 5 rows for header keywords
+        for i in range(min(5, len(rows))):
+            row = rows[i]
+            row_text = "".join(row).replace(" ", "")
+
+            # Check if this row looks like a header
+            is_header = False
+
+            # A row with numeric values (amounts, percentages) is data, not header
+            has_numeric = any(
+                re.match(r"^[\d,]+\.?\d*%?$", c.strip()) and len(c.strip()) > 2
+                for c in row if c.strip()
+            )
+
+            if not has_numeric:
+                # Only rows without numeric data can be headers
+                if any(kw in row_text for kw in ["주주명", "성명", "매각제한", "보호예수", "보유주식", "유통가능"]):
+                    is_header = True
+                # Check for header keyword that needs exact context (avoid matching 최대주주)
+                elif "관계" in row_text and "회사" in row_text:
+                    is_header = True
+                # Sub-header continuation (주식수, 지분율, etc.)
+                elif first_header_idx >= 0 and i <= first_header_idx + 3:
+                    non_empty = [c for c in row if c.strip()]
+                    if non_empty and all(
+                        not c.replace(",", "").replace(".", "").replace("%", "").isdigit()
+                        for c in non_empty
+                    ):
+                        is_header = True
+
+            if not is_header:
+                if first_header_idx >= 0:
+                    break  # We've passed the header section
+                continue
+
+            if first_header_idx < 0:
+                first_header_idx = i
+            last_header_idx = i
+
+            for idx, cell in enumerate(row):
+                clean = cell.replace(" ", "").replace("\n", "")
+                if not clean:
+                    continue
+
+                # Shareholder Name Anchor
+                if "name" not in anchors and (
+                    "주주명" in clean or "성명" in clean
+                    or "보유자명" in clean or "보유자" in clean  # Relaxed from == to in
+                    or "취득자" in clean
+                ):
+                    anchors["name"] = idx
+
+                # Relationship Anchor
+                if "relation" not in anchors and "관계" in clean:
+                    anchors["relation"] = idx
+
+                # Category Anchor
+                if "category" not in anchors and "구분" in clean:
+                    anchors["category"] = idx
+
+                # Quantity Anchor — multiple patterns for real-world tables
+                if "qty" not in anchors:
+                    if "매각제한" in clean and ("물량" in clean or "주식수" in clean or "수량" in clean):
+                        anchors["qty"] = idx
+                    elif "보유주식" in clean:  # Matches "보유주식수", "매출후 보유주식수"
+                        anchors["qty"] = idx
+                    elif "의무보유" in clean and "주식수" in clean:
+                        anchors["qty"] = idx
+                    elif "의무보유주식수" in clean:
+                        anchors["qty"] = idx
+                    elif "취득수량" in clean:
+                        anchors["qty"] = idx
+
+                # Period Anchor
+                if "period" not in anchors:
+                    if "매각제한기간" in clean or "보호예수기간" in clean or "의무보유기간" in clean:
+                        anchors["period"] = idx
+                    elif "기간" in clean and "행사기간" not in clean:  # Catches "의무보유 기간", "매각제한 기간"
+                        anchors["period"] = idx
+                    elif "비고" in clean: # Fallback: Sometimes period is in Remarks/Note column
+                        anchors["period"] = idx
+
+        # Minimum requirements: Name
+        if "name" in anchors:
+            return last_header_idx, anchors
+
+        return -1, {}
+
+    def _is_period_string(self, text: str) -> bool:
+        """Check if string looks like a lockup period"""
+        text = text.replace(" ", "")
+        return "상장일" in text or "개월" in text or ("년" in text and "주년" not in text)
+
+    def _create_entry(
+        self, 
+        metadata: Dict[str, str], 
+        qty_str: str, 
+        period_str: str,
+        listing_date: Optional[date]
+    ) -> Optional[LockupEntry]:
+        """Create LockupEntry from raw strings"""
+        
+        # Data Normalization
+        qty = self.normalizer.normalize_amount(qty_str)
+        period_months = self.normalizer.normalize_period(period_str)
+        
+        listing_date = listing_date or date.today() # Fallback if not provided, though bad practice
+        
+        release_date = None
+        if period_months is not None:
+             release_date = listing_date + timedelta(days=period_months * 30)
+        
+        # If we have at least period or quantity
+        if qty is not None or period_months is not None:
+            return LockupEntry(
+                owner=metadata["owner"],
+                amount=qty,
+                period_months=period_months,
+                release_date=release_date,
+                category=metadata.get("category"),
+                relation=metadata.get("relation"),
+                remarks=period_str # Store original period string as remarks
+            )
+        return None
+
     def _parse_table_rows(self, table: Tag) -> List[List[str]]:
-        """Parse table into list of rows"""
-        rows = []
+        """Parse table into list of rows with full colspan/rowspan expansion.
 
-        for tr in table.find_all("tr"):
-            cells = []
-            for cell in tr.find_all(["th", "td"]):
+        Produces a grid where every row has the same number of columns.
+        Cells spanned by rowspan are filled with empty strings in subsequent rows.
+        """
+        trs = table.find_all("tr")
+        if not trs:
+            return []
+
+        # First pass: determine grid dimensions
+        # pending_rowspans tracks cells that still need to be filled from previous rows
+        # Key: (row_idx, col_idx), Value: text (empty string for spanned cells)
+        pending: Dict[Tuple[int, int], str] = {}
+        raw_rows: List[List[str]] = []
+
+        for row_idx, tr in enumerate(trs):
+            cells_in_row: List[Tuple[int, str]] = []  # (col_idx, text)
+            col_cursor = 0
+            cell_elements = tr.find_all(["th", "td"])
+
+            for cell in cell_elements:
+                # Skip columns occupied by rowspan from previous rows
+                while (row_idx, col_cursor) in pending:
+                    col_cursor += 1
+
                 colspan = int(cell.get("colspan", 1))
-                text = cell.get_text(strip=True)
-                text = " ".join(text.split())  # Normalize whitespace
-                cells.append(text)
+                rowspan = int(cell.get("rowspan", 1))
+                text = " ".join(cell.get_text(strip=True).split())
 
-                # Handle colspan
-                for _ in range(colspan - 1):
-                    cells.append("")
+                # Place this cell and its colspan expansions
+                for c in range(colspan):
+                    actual_col = col_cursor + c
+                    cells_in_row.append((actual_col, text if c == 0 else ""))
 
-            if cells and any(cells):  # Skip completely empty rows
-                rows.append(cells)
+                    # Register rowspan for subsequent rows
+                    if rowspan > 1:
+                        for r in range(1, rowspan):
+                            pending[(row_idx + r, actual_col)] = ""
+
+                col_cursor += colspan
+
+            # Also check if there are any remaining pending cells after the last real cell
+            # (shouldn't normally happen but be safe)
+
+            raw_rows.append(cells_in_row)
+
+        # Second pass: build uniform grid
+        # Determine max columns
+        max_cols = 0
+        for row_idx, cell_list in enumerate(raw_rows):
+            cols_from_cells = max((c + 1 for c, _ in cell_list), default=0)
+            cols_from_pending = max(
+                (c + 1 for (r, c) in pending if r == row_idx), default=0
+            )
+            max_cols = max(max_cols, cols_from_cells, cols_from_pending)
+
+        rows: List[List[str]] = []
+        for row_idx, cell_list in enumerate(raw_rows):
+            row = [""] * max_cols
+            for col, text in cell_list:
+                if col < max_cols:
+                    row[col] = text
+            # Pending (rowspan) cells stay as empty strings — this is intentional
+            # so the stateful context propagation handles them
+            rows.append(row)
 
         return rows
 
-    def _identify_columns(self, headers: List[str]) -> Dict[str, int]:
-        """
-        Identify column indices for each data type
-
-        Returns:
-            Dict mapping column type to column index
-        """
-        column_map = {}
-
-        for i, header in enumerate(headers):
-            header_lower = header.lower()
-
-            for col_type, keywords in COLUMN_KEYWORDS.items():
-                if col_type in column_map:
-                    continue  # Already found this type
-
-                for keyword in keywords:
-                    if keyword in header_lower:
-                        column_map[col_type] = i
-                        break
-
-        logger.debug(f"Column mapping: {column_map}")
-        return column_map
-
-    def _extract_row(
-        self,
-        row: List[str],
-        column_map: Dict[str, int],
-        listing_date: Optional[date],
-    ) -> Optional[LockupEntry]:
-        """Extract a single entry from a row"""
-        try:
-            # Get owner (required)
-            owner_idx = column_map.get("owner")
-            if owner_idx is None or owner_idx >= len(row):
-                return None
-
-            owner = row[owner_idx].strip()
-            if not owner or len(owner) < 2:
-                return None
-
-            # Skip aggregate rows
-            skip_keywords = ["합계", "소계", "총계", "계", "합 계"]
-            if any(kw in owner for kw in skip_keywords):
-                return None
-
-            # Get amount
-            amount = None
-            amount_idx = column_map.get("amount")
-            if amount_idx is not None and amount_idx < len(row):
-                amount = self.normalizer.normalize_amount(row[amount_idx])
-
-            # Get ratio
-            ratio = None
-            ratio_idx = column_map.get("ratio")
-            if ratio_idx is not None and ratio_idx < len(row):
-                ratio = self.normalizer.normalize_ratio(row[ratio_idx])
-
-            # Get release date
-            release_date = None
-            date_idx = column_map.get("release_date")
-            if date_idx is not None and date_idx < len(row):
-                release_date = self.normalizer.normalize_date(
-                    row[date_idx],
-                    listing_date=listing_date,
-                )
-
-            # Get period
-            period_months = None
-            period_idx = column_map.get("period")
-            if period_idx is not None and period_idx < len(row):
-                period_months = self.normalizer.normalize_period(row[period_idx])
-
-            # Calculate release date from period if not directly available
-            if not release_date and period_months and listing_date:
-                from datetime import timedelta
-                release_date = listing_date + timedelta(days=period_months * 30)
-
-            # Must have at least owner and one other field
-            if not any([amount, ratio, release_date, period_months]):
-                return None
-
-            return LockupEntry(
-                owner=owner,
-                amount=amount,
-                ratio=ratio,
-                release_date=release_date,
-                period_months=period_months,
-            )
-
-        except Exception as e:
-            logger.warning(f"Failed to extract row: {e}")
-            return None
-
-    def extract_from_html(
-        self,
-        html_content: str,
-        listing_date: Optional[date] = None,
-    ) -> List[LockupEntry]:
-        """
-        Extract from raw HTML content by finding all tables
-
-        Args:
-            html_content: HTML string
-            listing_date: Company listing date
-        """
+    # Legacy method support if needed, or just let it handle things
+    def extract_from_html(self, html_content: str, listing_date: Optional[date] = None) -> List[LockupEntry]:
         soup = BeautifulSoup(html_content, "lxml")
         all_entries = []
-
         for table in soup.find_all("table"):
-            # Skip nested tables
-            if table.find_parent("table"):
-                continue
-
-            entries = self.extract_from_table(table, listing_date)
-            all_entries.extend(entries)
-
+            if table.find_parent("table"): continue
+            all_entries.extend(self.extract_from_table(table, listing_date))
         return all_entries
 
 

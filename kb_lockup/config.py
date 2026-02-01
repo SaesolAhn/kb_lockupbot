@@ -2,6 +2,14 @@
 
 from pydantic_settings import BaseSettings
 from pathlib import Path
+import warnings
+
+# Suppress BeautifulSoup XML warning
+try:
+    from bs4 import XMLParsedAsHTMLWarning
+    warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
+except ImportError:
+    pass
 
 
 class Settings(BaseSettings):
@@ -13,7 +21,7 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
 
     # Database
-    db_path: Path = Path("data/kb_lockup.db")
+    db_path: Path = Path("/Users/sol/kb_lockupbot/data/kb_lockup.db")
 
     # DART settings
     dart_base_url: str = "https://opendart.fss.or.kr/api"
@@ -22,8 +30,16 @@ class Settings(BaseSettings):
 
     # Extraction settings
     qwen_model: str = "qwen-plus"
-    qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    qwen_api_base_url: str = "https://dashscope-intl.aliyuncs.com/compatible-mode"
     min_extraction_score: float = 0.6
+
+    @property
+    def qwen_base_url_v1(self) -> str:
+        """Return base URL with /v1 suffix for OpenAI client compatibility"""
+        url = self.qwen_api_base_url.rstrip("/")
+        if not url.endswith("/v1"):
+            url += "/v1"
+        return url
 
     # Telegram settings
     reminder_check_hour: int = 8

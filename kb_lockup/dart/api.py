@@ -117,14 +117,15 @@ class DartAPI:
                 # Check DART API status codes
                 status = data.get("status")
                 if status == "013":
-                    logger.warning("DART API rate limit exceeded")
-                    raise RateLimitError()
+                    # 조회된 데이타가 없습니다 - No data found
+                    logger.debug(f"No data found for {endpoint}")
+                    return {"list": []}
                 elif status == "010":
                     raise DocumentNotFoundError(params.get("rcept_no", "unknown"))
                 elif status == "020":
-                    # No data found - return empty result
-                    logger.debug(f"No data found for {endpoint}")
-                    return {"list": []}
+                    # 요청 제한을 초과하였습니다 - Rate limit exceeded
+                    logger.warning("DART API rate limit exceeded")
+                    raise RateLimitError()
                 elif status and status != "000":
                     raise DartAPIError(
                         f"DART API error: {data.get('message', 'Unknown error')}",
@@ -294,11 +295,16 @@ class DartAPI:
         """
         params = {
             "corp_code": corp_code,
-            "pblntf_ty": "I",  # 증권신고서
+            "pblntf_ty": "C",  # 발행공시 (증권신고서)
         }
 
         if bgn_de:
             params["bgn_de"] = bgn_de
+        else:
+            # Default to 3 years lookback if not specified
+            from datetime import timedelta
+            params["bgn_de"] = (date.today() - timedelta(days=1095)).strftime("%Y%m%d")
+
         if end_de:
             params["end_de"] = end_de
 

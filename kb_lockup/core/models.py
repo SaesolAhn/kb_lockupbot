@@ -31,6 +31,8 @@ class LockupEntry(BaseModel):
     ratio: Optional[float] = Field(None, ge=0, le=100, description="Ownership %")
     release_date: Optional[date] = Field(None, description="Lockup release date")
     period_months: Optional[int] = Field(None, description="Lock period in months")
+    category: Optional[str] = Field(None, description="Shareholder category")
+    relation: Optional[str] = Field(None, description="Relation to company")
     remarks: Optional[str] = None
 
     class Config:
